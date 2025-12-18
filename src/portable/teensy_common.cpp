@@ -37,7 +37,7 @@
 #include "event_responder_support.h"
 
 
-#if !(defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41 || defined __MK64FX512__ || defined __MK66FX1M0__)
+#if !(defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41)
 #error "Unsupported board"
 #endif
 
@@ -212,9 +212,7 @@ FLASHMEM _Unwind_Reason_Code trace_fcn(_Unwind_Context* ctx, void* depth) {
  */
 FLASHMEM void assert_blink(const char* file, int line, const char* func, const char* expr) {
     portDISABLE_INTERRUPTS();
-#if defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41
     NVIC_SET_PRIORITY(IRQ_USB1, (configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY - 1) << (8 - configPRIO_BITS));
-#endif // ARDUINO_TEENSY40 || ARDUINO_TEENSY41
 
     EXC_PRINTF(PSTR("\r\nASSERT in [%s:%u]\t"), file, line);
     EXC_PRINTF(PSTR("%s(): "), func);
@@ -284,6 +282,11 @@ void clock::sync_rtc() {
 
     taskEXIT_CRITICAL();
 }
+
+#if configUSE_IDLE_HOOK == 1
+void idle_hook() __attribute__((weak));
+FLASHMEM void idle_hook() {}
+#endif // configUSE_IDLE_HOOK == 1
 } // namespace freertos
 
 extern "C" {
@@ -295,25 +298,15 @@ void event_responder_set_pend_sv() {
     }
 }
 
-FLASHMEM void yield() {
-    if (::xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED && freertos::g_yield_task) {
-        if (::xPortIsInsideInterrupt() == pdTRUE) {
-            BaseType_t higher_woken { pdFALSE };
-            ::xTaskNotifyFromISR(freertos::g_yield_task, 0, eNoAction, &higher_woken);
-            portYIELD_FROM_ISR(higher_woken);
-            portDATA_SYNC_BARRIER(); // mitigate arm errata #838869
-        } else {
-            ::xTaskNotify(freertos::g_yield_task, 0, eNoAction);
-            ::vTaskDelay(1);
-        }
-    } else {
-        freertos::yield();
-    }
-}
-
 #if configUSE_IDLE_HOOK == 1
-void vApplicationIdleHook() {}
-#endif // configUSE_IDLE_HOOK
+void vApplicationIdleHook() {
+    freertos::idle_hook();
+
+#if !defined configUSE_CUSTOM_YIELD_HANDLER || configUSE_CUSTOM_YIELD_HANDLER == 0
+    ::yield();
+#endif // configUSE_CUSTOM_YIELD_HANDLER == 0
+}
+#endif // configUSE_IDLE_HOOK == 1
 
 #if configCHECK_FOR_STACK_OVERFLOW > 0
 FLASHMEM void vApplicationStackOverflowHook(TaskHandle_t, char* task_name) {
@@ -347,15 +340,15 @@ FLASHMEM void vApplicationGetTimerTaskMemory(StaticTask_t** ppxTimerTaskTCBBuffe
     *ppxTimerTaskStackBuffer = uxTimerTaskStack;
     *pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
 }
-#endif // configUSE_TIMERS
-#endif // configSUPPORT_STATIC_ALLOCATION
+#endif // configUSE_TIMERS == 1
+#endif // configSUPPORT_STATIC_ALLOCATION == 1
 
 #if defined PLATFORMIO || TEENSYDUINO >= 158
 #if configUSE_MALLOC_FAILED_HOOK == 1
 FLASHMEM void vApplicationMallocFailedHook() {
     freertos::error_blink(2);
 }
-#endif // configUSE_MALLOC_FAILED_HOOK
+#endif // configUSE_MALLOC_FAILED_HOOK == 1
 
 void* _sbrk_r(struct _reent* p_reent, ptrdiff_t incr) {
     static_assert(portSTACK_GROWTH == -1, "Stack growth down assumed");
@@ -415,7 +408,7 @@ FLASHMEM int _gettimeofday(timeval* tv, void*) {
 uint64_t freertos_get_us() {
     return freertos::get_us();
 }
-#endif // configGENERATE_RUN_TIME_STATS
+#endif // configGENERATE_RUN_TIME_STATS == 1
 
 void startup_late_hook() __attribute__((noinline, section(".flashmem")));
 void startup_late_hook() {

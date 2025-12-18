@@ -25,8 +25,9 @@
 
 #if defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41
 #include <cstring>
-#include <malloc.h>
 #include <tuple>
+#include <atomic>
+#include <malloc.h>
 #include <unwind.h>
 
 #include "teensy.h"
@@ -73,92 +74,29 @@ extern uint8_t external_psram_size;
 void __NVIC_SetPriorityGrouping(uint32_t PriorityGroup);
 } // extern C
 
+extern uint8_t yield_active_check_flags;
 
-#ifdef USB_TRIPLE_SERIAL
-extern uint8_t yield_active_check_flags;
-extern const uint8_t _serialEventUSB2_default;
-extern const uint8_t _serialEventUSB1_default;
-#elif defined(USB_DUAL_SERIAL)
-extern uint8_t yield_active_check_flags;
-extern const uint8_t _serialEventUSB1_default;
-#else
-extern uint8_t yield_active_check_flags;
+#ifndef configUSE_CUSTOM_YIELD_HANDLER
+#define configUSE_CUSTOM_YIELD_HANDLER 0
 #endif
 
-#if TEENSYDUINO <= 158
-extern const uint8_t _serialEvent_default;
-#endif
-
-namespace freertos {
-#if TEENSYDUINO <= 158
+#if configUSE_CUSTOM_YIELD_HANDLER == 0
+#if configUSE_IDLE_HOOK == 0
+#warning "configUSE_IDLE_HOOK is disabled, but the default yield handler should be used. Consider enabling configUSE_IDLE_HOOK to ensure yield processing."
+#endif // configUSE_IDLE_HOOK == 0
 
 FLASHMEM void yield() {
-    static uint8_t running = 0;
-    if (!yield_active_check_flags) {
-        // nothing to do
-        return;
-    }
-    if (running) {
-        return;
-    }
-    running = 1;
+    static std::atomic<bool> running { false };
 
-    // USB Serial - Add hack to minimize impact...
-    if (yield_active_check_flags & YIELD_CHECK_USB_SERIAL) {
-        if (Serial.available()) {
-            serialEvent();
-        }
-        if (_serialEvent_default) {
-            yield_active_check_flags &= ~YIELD_CHECK_USB_SERIAL;
-        }
-    }
-
-#if defined(USB_DUAL_SERIAL) || defined(USB_TRIPLE_SERIAL)
-    if (yield_active_check_flags & YIELD_CHECK_USB_SERIALUSB1) {
-        if (SerialUSB1.available()) {
-            serialEventUSB1();
-        }
-        if (_serialEventUSB1_default) {
-            yield_active_check_flags &= ~YIELD_CHECK_USB_SERIALUSB1;
-        }
-    }
-#endif // USB_DUAL_SERIAL || USB_TRIPLE_SERIAL
-#ifdef USB_TRIPLE_SERIAL
-    if (yield_active_check_flags & YIELD_CHECK_USB_SERIALUSB2) {
-        if (SerialUSB2.available()) {
-            serialEventUSB2();
-        }
-        if (_serialEventUSB2_default) {
-            yield_active_check_flags &= ~YIELD_CHECK_USB_SERIALUSB2;
-        }
-    }
-#endif // USB_TRIPLE_SERIAL
-
-#if !defined DISABLE_ARDUINO_HWSERIAL
-    // Current workaround until integrate with EventResponder.
-    if (yield_active_check_flags & YIELD_CHECK_HARDWARE_SERIAL) {
-        HardwareSerial::processSerialEventsList();
-    }
-#endif // !DISABLE_ARDUINO_HWSERIAL
-
-    running = 0;
-    if (yield_active_check_flags & YIELD_CHECK_EVENT_RESPONDER) {
-        EventResponder::runFromYield();
-    }
-}
-#else // TEENSYDUINO > 158
-FLASHMEM void yield() {
-    static uint8_t running = 0;
-
-    const uint8_t check_flags = yield_active_check_flags;
+    const auto check_flags { yield_active_check_flags };
     if (!check_flags) {
         return; // nothing to do
     }
 
-    if (running) {
+    bool expected {};
+    if (!running.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
         return;
     }
-    running = 1;
 
     // USB Serial - Add hack to minimize impact...
     if (check_flags & YIELD_CHECK_USB_SERIAL) {
@@ -173,29 +111,31 @@ FLASHMEM void yield() {
             serialEventUSB1();
         }
     }
-#endif // USB_DUAL_SERIAL || USB_TRIPLE_SERIAL
+#endif
 #ifdef USB_TRIPLE_SERIAL
     if (check_flags & YIELD_CHECK_USB_SERIALUSB2) {
         if (SerialUSB2.available()) {
             serialEventUSB2();
         }
     }
-#endif // USB_TRIPLE_SERIAL
+#endif
 
-#if !defined DISABLE_ARDUINO_HWSERIAL
+#ifndef DISABLE_ARDUINO_HWSERIAL
     // Current workaround until integrate with EventResponder.
     if (check_flags & YIELD_CHECK_HARDWARE_SERIAL) {
         HardwareSerialIMXRT::processSerialEventsList();
     }
 #endif // !DISABLE_ARDUINO_HWSERIAL
 
-    running = 0;
     if (check_flags & YIELD_CHECK_EVENT_RESPONDER) {
         EventResponder::runFromYield();
     }
-}
-#endif // TEENSYDUINO
 
+    running.store(false, std::memory_order_relaxed);
+}
+#endif // configUSE_CUSTOM_YIELD_HANDLER == 0
+
+namespace freertos {
 FLASHMEM void delay_ms(const uint32_t ms) {
     const uint32_t cycles_ms { static_cast<uint32_t>((1ULL << 32) * 1'000'000ULL / 2'000ULL / static_cast<uint64_t>(scale_cpu_cycles_to_microseconds)) };
     const uint32_t n { ms / 10 };
@@ -306,7 +246,7 @@ void unused_isr_freertos() {
 extern uint32_t ulTimerCountsForOneTick;
 extern uint32_t xMaximumPossibleSuppressedTicks;
 extern uint32_t ulStoppedTimerCompensation;
-#endif /* configUSE_TICKLESS_IDLE */
+#endif // configUSE_TICKLESS_IDLE == 1
 
 void vPortSetupTimerInterrupt() {
     if (DEBUG) {
@@ -360,7 +300,7 @@ void vPortSetupTimerInterrupt() {
         xMaximumPossibleSuppressedTicks = 0xffffffUL / ulTimerCountsForOneTick;
         ulStoppedTimerCompensation = 94UL / (configCPU_CLOCK_HZ / configSYSTICK_CLOCK_HZ);
     }
-#endif // configUSE_TICKLESS_IDLE
+#endif // configUSE_TICKLESS_IDLE == 1
 
     freertos::clock::sync_rtc();
 
@@ -385,7 +325,7 @@ void vApplicationTickHook() {
         n = 0;
     }
 }
-#else
+#else // configUSE_TICK_HOOK == 0
 #error "configUSE_TICK_HOOK == 0 isn't supported!"
 #endif // configUSE_TICK_HOOK
 

@@ -32,19 +32,9 @@
 
 
 namespace freertos {
-TaskHandle_t g_yield_task {};
 TaskHandle_t g_event_responder_task {};
 
 void setup_event_responder() {
-    ::xTaskCreate(
-        [](void*) {
-            while (true) {
-                ::xTaskNotifyWait(0, 0, nullptr, pdMS_TO_TICKS(YIELD_TASK_PERIOD_MS));
-                freertos::yield();
-            }
-        },
-        PSTR("YIELD"), YIELD_TASK_STACK_SIZE, nullptr, YIELD_TASK_PRIORITY, &g_yield_task);
-
     auto p_event_timer_ { ::xTimerCreate(PSTR("event_t"), pdMS_TO_TICKS(1), true, nullptr, [](TimerHandle_t) { ::MillisTimer::runFromTimer(); }) };
     xTimerStart(p_event_timer_, 0);
 

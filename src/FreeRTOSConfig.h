@@ -366,6 +366,8 @@ PRIORITY THAN THIS! (higher priorities are lower numeric values. */
 #define configUSE_MALLOC_FAILED_HOOK          1
 #define configUSE_DAEMON_TASK_STARTUP_HOOK    0
 
+#define configUSE_CUSTOM_YIELD_HANDLER        0
+
 /* Set configUSE_SB_COMPLETED_CALLBACK to 1 to have send and receive completed
  * callbacks for each instance of a stream buffer or message buffer. When the
  * option is set to 1, APIs xStreamBufferCreateWithCallback() and
@@ -462,14 +464,9 @@ void assert_blink(const char*, int, const char*, const char*) __attribute__((nor
 }
 #define ASSERT_LOG(_msg) assert_blink("", __LINE__, __PRETTY_FUNCTION__, #_msg);
 #else
-#if defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41
-#define PROGMEM_FREERTOS __attribute__((section(".progmem")))
-#else
-#define PROGMEM_FREERTOS
-#endif
 #define ASSERT_LOG(_msg)                                                            \
     {                                                                               \
-        static const char _file_[] PROGMEM_FREERTOS = __FILE__;                     \
+        static const char _file_[] __attribute__((section(".progmem"))) = __FILE__; \
         assert_blink((const char*) _file_, __LINE__, __PRETTY_FUNCTION__, #_msg);   \
     }
 #endif // __cplusplus
