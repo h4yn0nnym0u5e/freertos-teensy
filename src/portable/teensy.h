@@ -80,6 +80,7 @@ void mcu_shutdown() __attribute__((noreturn, used));
 
 namespace freertos {
 void yield();
+void default_yield();
 
 /**
  * @brief Delay between led error flashes
