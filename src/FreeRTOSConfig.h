@@ -366,7 +366,12 @@ PRIORITY THAN THIS! (higher priorities are lower numeric values. */
 #define configUSE_MALLOC_FAILED_HOOK          1
 #define configUSE_DAEMON_TASK_STARTUP_HOOK    0
 
+/* Set to 1 to override the implementation of yield() and setup_yield() */
 #define configUSE_CUSTOM_YIELD_HANDLER        0
+/* Frequency for yield() calls from yield task in ticks */
+#define configYIELD_TASK_FREQUENCY_TICKS      (pdMS_TO_TICKS(10))
+/* Size of stack for yield task in words */
+#define configYIELD_TASK_STACK_SIZE           ( 1536U / 4U ) 
 
 /* Set configUSE_SB_COMPLETED_CALLBACK to 1 to have send and receive completed
  * callbacks for each instance of a stream buffer or message buffer. When the

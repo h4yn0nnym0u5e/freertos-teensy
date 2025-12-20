@@ -74,24 +74,23 @@ extern uint8_t external_psram_size;
 void __NVIC_SetPriorityGrouping(uint32_t PriorityGroup);
 } // extern C
 
-extern uint8_t yield_active_check_flags;
-
 #ifndef configUSE_CUSTOM_YIELD_HANDLER
 #define configUSE_CUSTOM_YIELD_HANDLER 0
 #endif
 
 #if configUSE_CUSTOM_YIELD_HANDLER == 0
-#if configUSE_IDLE_HOOK == 0
-#warning "configUSE_IDLE_HOOK is disabled, but the default yield handler should be used. Consider enabling configUSE_IDLE_HOOK to ensure yield processing."
-#endif // configUSE_IDLE_HOOK == 0
-
-FLASHMEM void yield() { freertos::default_yield(); }
-
+void yield() {
+    freertos::default_yield();
+}
 #endif // configUSE_CUSTOM_YIELD_HANDLER == 0
 
+extern uint8_t yield_active_check_flags;
+
 namespace freertos {
-FLASHMEM void default_yield() {
-    static std::atomic<bool> running { false };
+TaskHandle_t g_yield_task {};
+
+void default_yield() {
+    static std::atomic<bool> running {};
 
     const auto check_flags { yield_active_check_flags };
     if (!check_flags) {
@@ -137,6 +136,21 @@ FLASHMEM void default_yield() {
     }
 
     running.store(false, std::memory_order_relaxed);
+}
+
+FLASHMEM __attribute__((weak)) void setup_yield() {
+#if configUSE_CUSTOM_YIELD_HANDLER == 0
+    ::xTaskCreate(
+        [](void*) {
+            TickType_t last_yield_time { ::xTaskGetTickCount() };
+
+            while (true) {
+                ::xTaskDelayUntil(&last_yield_time, configYIELD_TASK_FREQUENCY_TICKS);
+                ::yield();
+            }
+        },
+        PSTR("YIELD"), configYIELD_TASK_STACK_SIZE, nullptr, 0, &g_yield_task);
+#endif // configUSE_CUSTOM_YIELD_HANDLER == 0
 }
 
 FLASHMEM void delay_ms(const uint32_t ms) {
@@ -308,6 +322,7 @@ void vPortSetupTimerInterrupt() {
     freertos::clock::sync_rtc();
 
     freertos::setup_event_responder();
+    freertos::setup_yield();
 
     if (DEBUG) {
         EXC_PRINTF_EARLY(PSTR("SCB_SHPR3=0x%x\r\n"), SCB_SHPR3);

@@ -34,7 +34,7 @@
 namespace freertos {
 TaskHandle_t g_event_responder_task {};
 
-void setup_event_responder() {
+FLASHMEM __attribute__((weak)) void setup_event_responder() {
     auto p_event_timer_ { ::xTimerCreate(PSTR("event_t"), pdMS_TO_TICKS(1), true, nullptr, [](TimerHandle_t) { ::MillisTimer::runFromTimer(); }) };
     xTimerStart(p_event_timer_, 0);
 

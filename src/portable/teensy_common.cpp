@@ -282,11 +282,6 @@ void clock::sync_rtc() {
 
     taskEXIT_CRITICAL();
 }
-
-#if configUSE_IDLE_HOOK == 1
-void idle_hook() __attribute__((weak));
-FLASHMEM void idle_hook() {}
-#endif // configUSE_IDLE_HOOK == 1
 } // namespace freertos
 
 extern "C" {
@@ -299,13 +294,7 @@ void event_responder_set_pend_sv() {
 }
 
 #if configUSE_IDLE_HOOK == 1
-void vApplicationIdleHook() {
-    freertos::idle_hook();
-
-#if !defined configUSE_CUSTOM_YIELD_HANDLER || configUSE_CUSTOM_YIELD_HANDLER == 0
-    ::yield();
-#endif // configUSE_CUSTOM_YIELD_HANDLER == 0
-}
+__attribute__((weak)) void vApplicationIdleHook() {}
 #endif // configUSE_IDLE_HOOK == 1
 
 #if configCHECK_FOR_STACK_OVERFLOW > 0
