@@ -85,7 +85,12 @@ extern uint8_t yield_active_check_flags;
 #warning "configUSE_IDLE_HOOK is disabled, but the default yield handler should be used. Consider enabling configUSE_IDLE_HOOK to ensure yield processing."
 #endif // configUSE_IDLE_HOOK == 0
 
-FLASHMEM void yield() {
+FLASHMEM void yield() { freertos::default_yield(); }
+
+#endif // configUSE_CUSTOM_YIELD_HANDLER == 0
+
+namespace freertos {
+FLASHMEM void default_yield() {
     static std::atomic<bool> running { false };
 
     const auto check_flags { yield_active_check_flags };
@@ -133,9 +138,7 @@ FLASHMEM void yield() {
 
     running.store(false, std::memory_order_relaxed);
 }
-#endif // configUSE_CUSTOM_YIELD_HANDLER == 0
 
-namespace freertos {
 FLASHMEM void delay_ms(const uint32_t ms) {
     const uint32_t cycles_ms { static_cast<uint32_t>((1ULL << 32) * 1'000'000ULL / 2'000ULL / static_cast<uint64_t>(scale_cpu_cycles_to_microseconds)) };
     const uint32_t n { ms / 10 };
