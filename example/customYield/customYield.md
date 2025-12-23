@@ -21,8 +21,10 @@ Note that this sketch is _not_ intended to be an example of good practice! It ru
 | `ticky` | 1 | prints TICK TOCK repeatedly to `Serial`; may hog CPU |
 | `newln` | 2 | prints info to `Serial` every 5 seconds |
 | `yield`* | 0 | calls `yield()` at configured period, or if explicitly triggered |
-
+| `YIELD`** | 0 | calls `yield()` at configured period, or if explicitly 
 \* only if enabled by use of custom yield handler
+
+\** built in to library: only runs if there is no custom yield handler
 
 ### Customisation options
 Various customisation options are available to allow quick changes to the example's performance so you can see the result.

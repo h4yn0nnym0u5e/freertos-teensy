@@ -42,6 +42,8 @@ struct taskInfo {
 void listTasksInfo(void)
 {
   taskStatuses[0].handle = xTaskGetIdleTaskHandle();
+  if (!taskStatuses[4].handle) // no custom yield task handle, but...
+    taskStatuses[5].handle = freertos::g_yield_task; // ...maybe there's a library one
   
   for (int i=0;i<TC;i++)
     if (taskStatuses[i].handle) 

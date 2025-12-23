@@ -3,7 +3,7 @@
 
 #define YIELD_TASK_PERIOD_MS   10
 //*
-#define YIELD_TASK_PRIORITY     0
+#define YIELD_TASK_PRIORITY     1
 /*/
 #define YIELD_TASK_PRIORITY     (configMAX_PRIORITIES - 1)  
 // */
@@ -16,5 +16,7 @@ extern void initYieldEvent(void);
 extern TaskHandle_t initCustomYield(void);
 extern void yield_direct(void);
 extern uint32_t measureYieldDuration(void);
-
+namespace freertos { 
+  extern TaskHandle_t g_yield_task; 
+}
 #endif // !defined(_YIELDSTUFF_H_)
