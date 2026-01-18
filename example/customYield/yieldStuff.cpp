@@ -68,9 +68,6 @@ volatile uint32_t yield_task_count; // increments if yield task is running, coun
  */
 
 namespace freertos {
-  
-TaskHandle_t g_yield_task {}; 
-
 /*
  * Actual implementation of yield() code, 
  * copied into the 'freertos' namespace
