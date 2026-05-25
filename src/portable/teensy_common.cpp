@@ -351,7 +351,7 @@ void* _sbrk_r(struct _reent* p_reent, ptrdiff_t incr) {
     if (DEBUG) {
         EXC_PRINTF(PSTR("_sbrk_r(%d): "), incr);
         EXC_PRINTF(PSTR("current_heap_end=0x%x "), reinterpret_cast<uintptr_t>(_g_current_heap_end));
-#if // defined(ARDUINO_TEENSY40) || defined(ARDUINO_TEENSY41)
+#if defined(ARDUINO_TEENSY40) || defined(ARDUINO_TEENSY41)
         EXC_PRINTF(PSTR("_heap_start=0x%x "), reinterpret_cast<uintptr_t>(&_heap_start));
         EXC_PRINTF(PSTR("_heap_end=0x%x\r\n"), reinterpret_cast<uintptr_t>(&_heap_end));
 #else
@@ -365,7 +365,7 @@ void* _sbrk_r(struct _reent* p_reent, ptrdiff_t incr) {
     void* previous_heap_end { _g_current_heap_end };
 
 #if defined(ARDUINO_TEENSY40) || defined(ARDUINO_TEENSY41)
-    void* new_heap_end = previous_heap_end + incr;
+    void* new_heap_end = _g_current_heap_end + incr;
     if ( (new_heap_end >= &_heap_end)
       || (new_heap_end < previous_heap_end) // incr is huge - overflowed!
         )
