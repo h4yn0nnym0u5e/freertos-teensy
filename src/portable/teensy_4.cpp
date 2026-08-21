@@ -1,6 +1,6 @@
 /*
  * This file is part of the FreeRTOS port to Teensy boards.
- * Copyright (c) 2020-2025 Timo Sandmann
+ * Copyright (c) 2020-2026 Timo Sandmann
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -51,7 +51,6 @@
 static constexpr bool DEBUG { false }; // compile with -DPRINT_DEBUG_STUFF for debug output on Serial4
 
 extern "C" {
-extern uint8_t* _g_current_heap_end;
 extern unsigned long _heap_start;
 extern unsigned long _heap_end;
 extern unsigned long _estack;
@@ -64,6 +63,8 @@ extern unsigned long _extram_start;
 extern unsigned long _extram_end;
 #endif // ARDUINO_TEENSY41
 extern unsigned long _itcm_block_count;
+extern uint8_t* _g_heap_start;
+extern uint8_t* _g_heap_max;
 extern uint8_t* _g_current_heap_end;
 
 extern volatile uint32_t systick_millis_count;
@@ -170,23 +171,37 @@ FLASHMEM void delay_ms(const uint32_t ms) {
     portINSTR_SYNC_BARRIER();
 }
 
-FLASHMEM std::tuple<size_t, size_t, size_t, size_t, size_t, size_t, size_t> ram1_usage() {
+FLASHMEM std::tuple<size_t, size_t, size_t, size_t, size_t> ram1_usage() {
     const size_t blk_cnt { reinterpret_cast<uintptr_t>(&_itcm_block_count) };
     const size_t ram_size { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_estack) - reinterpret_cast<uint8_t*>(0x20'000'000)) + blk_cnt * 32'768U };
     const size_t bss { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_ebss) - reinterpret_cast<uint8_t*>(&_sbss)) };
     const size_t data { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_edata) - reinterpret_cast<uint8_t*>(&_sdata)) };
-    const size_t system_free { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_estack) - _g_current_heap_end) - 8'192U };
-    const auto info { mallinfo() };
-    const std::tuple<size_t, size_t, size_t, size_t, size_t, size_t, size_t> ret { system_free + info.fordblks, data, bss, info.uordblks, system_free,
-        blk_cnt * 32'768U, ram_size };
+    size_t dtcm_free;
+    if (_g_heap_start >= reinterpret_cast<uint8_t*>(&_heap_start) && _g_heap_start <= reinterpret_cast<uint8_t*>(_heap_end)) {
+        /* Heap in RAM, get free space from linker allocation */
+        dtcm_free = static_cast<size_t>(reinterpret_cast<uint8_t*>(&_estack) - reinterpret_cast<uint8_t*>(&_ebss)) - freertos::MAIN_STACK_SIZE;
+    } else {
+        /* Heap in DTCM, calculate free space based on program break and mallinfo */
+        const auto info { ::mallinfo() };
+        dtcm_free = static_cast<size_t>(_g_heap_max - _g_current_heap_end) + info.fordblks;
+    }
+    const std::tuple<size_t, size_t, size_t, size_t, size_t> ret { dtcm_free, data, bss, blk_cnt * 32'768U, ram_size };
     return ret;
 }
 
 FLASHMEM std::tuple<size_t, size_t> ram2_usage() {
     const size_t ram_size { static_cast<size_t>(reinterpret_cast<uint8_t*>(0x20'280'000) - reinterpret_cast<uint8_t*>(0x20'200'000)) };
-    const size_t free { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_heap_end) - _g_current_heap_end) };
+    size_t ram_free;
+    if (_g_heap_start >= reinterpret_cast<uint8_t*>(&_heap_start) && _g_heap_start <= reinterpret_cast<uint8_t*>(_heap_end)) {
+        /* Heap in RAM, calculate free space based on program break and mallinfo */
+        const auto info { ::mallinfo() };
+        ram_free = static_cast<size_t>(_g_heap_max - _g_current_heap_end) + info.fordblks;
+    } else {
+        /* Heap in DTCM, get free space from linker allocation */
+        ram_free = static_cast<size_t>(reinterpret_cast<uint8_t*>(&_heap_end) - reinterpret_cast<uint8_t*>(&_heap_start));
+    }
 
-    const std::tuple<size_t, size_t> ret { free, ram_size };
+    const std::tuple<size_t, size_t> ret { ram_free, ram_size };
     return ret;
 }
 

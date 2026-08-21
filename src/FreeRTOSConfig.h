@@ -313,14 +313,15 @@ extern "C" {
  * catch pointer corruptions. Defaults to 0 if left undefined. */
 #define configENABLE_HEAP_PROTECTOR                  0
 
-/* Set configTEENSY_ENABLE_HEAP_IN_RAM1 to 1 to keep default behaviour of
- * https://github.com/tsandmann/freertos-teensy. According to 
- * https://github.com/tsandmann/freertos-teensy/pull/41 this is done to force 
- * task stacks into DTCM, because that's faster. Unfortunately, it also limits
- * the size of the application (in ITCM) and breaks malloc().
- * Defaults to 1 if left undefined (see teensy_common.cpp)
- */
-#define configTEENSY_ENABLE_HEAP_IN_RAM1             1
+/* Set configTEENSY_HEAP_ALLOCATION to 
+ * 1 to put the heap in DTCM (after bss and before end of main stack), 
+ * 2 to put the heap in RAM (after bss.dma and before exidx). */
+#define configTEENSY_HEAP_ALLOCATION                 1
+
+/* Main stack depth in bytes. */
+#ifndef configMAIN_STACK_DEPTH
+#define configMAIN_STACK_DEPTH                      ( 4096U )
+#endif
 
 /******************************************************************************/
 /* Interrupt nesting behaviour configuration. *********************************/

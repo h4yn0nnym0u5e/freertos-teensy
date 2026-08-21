@@ -1,6 +1,6 @@
 /*
  * This file is part of the FreeRTOS port to Teensy boards.
- * Copyright (c) 2020-2025 Timo Sandmann
+ * Copyright (c) 2020-2026 Timo Sandmann
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,6 +26,7 @@
 #define _DEFAULT_SOURCE
 #include <cstring>
 #include <unistd.h>
+#include <malloc.h>
 #include <errno.h>
 #include <sys/time.h>
 #include <unwind.h>
@@ -41,9 +42,9 @@
 #error "Unsupported board"
 #endif
 
-#if !defined(configTEENSY_ENABLE_HEAP_IN_RAM1)
-#define configTEENSY_ENABLE_HEAP_IN_RAM1 1 // original behaviour; breaks malloc()
-#endif // !defined(configTEENSY_ENABLE_HEAP_IN_RAM1)
+#if !defined(configTEENSY_HEAP_ALLOCATION)
+#error "configTEENSY_HEAP_ALLOCATION not defined"
+#endif
 
 static constexpr bool DEBUG { false };
 
@@ -54,18 +55,34 @@ asm(".global _printf_float"); /**< printf supporting floating point values */
 
 extern unsigned long _estack;
 extern unsigned long _ebss;
+extern unsigned long _heap_start;
+extern unsigned long _heap_end;
 
 extern volatile uint32_t systick_millis_count;
 extern volatile uint32_t systick_cycle_count;
 extern uint32_t set_arm_clock(uint32_t frequency);
-#if configTEENSY_ENABLE_HEAP_IN_RAM1 != 1
-extern unsigned long _heap_start;
-extern unsigned long _heap_end;
-uint8_t* _g_current_heap_end { reinterpret_cast<uint8_t*>(&_heap_start) };
-#else
-uint8_t* _g_current_heap_end { reinterpret_cast<uint8_t*>(&_ebss) + 32 };
-#endif // configTEENSY_ENABLE_HEAP_IN_RAM1 != 1
 
+__attribute__((weak)) uint8_t* _g_heap_start {
+#if configTEENSY_HEAP_ALLOCATION == 1
+    /* heap placed in DTCM (after bss and before end of main stack) */
+    reinterpret_cast<uint8_t*>(&_ebss) + 32
+#elif configTEENSY_HEAP_ALLOCATION == 2
+    /* heap placed in RAM (after bss.dma and before exidx) */
+    reinterpret_cast<uint8_t*>(&_heap_start)
+#else
+#error "Unsupported configTEENSY_HEAP_ALLOCATION value"
+#endif // configTEENSY_HEAP_ALLOCATION
+};
+
+__attribute__((weak)) uint8_t* _g_heap_max {
+#if configTEENSY_HEAP_ALLOCATION == 1
+    reinterpret_cast<uint8_t*>(&_estack) - freertos::MAIN_STACK_SIZE
+#elif configTEENSY_HEAP_ALLOCATION == 2
+    reinterpret_cast<uint8_t*>(&_heap_end)
+#endif // configTEENSY_HEAP_ALLOCATION
+};
+
+uint8_t* _g_current_heap_end { _g_heap_start };
 
 
 FLASHMEM __attribute__((weak)) uint8_t get_debug_led_pin() {
@@ -264,15 +281,23 @@ FLASHMEM void error_blink(const uint8_t n) {
     }
 }
 
+FLASHMEM std::tuple<size_t, size_t> heap_usage() {
+    const size_t system_free { static_cast<size_t>(_g_heap_max - _g_current_heap_end) };
+    const auto info { ::mallinfo() };
+
+    return std::make_tuple(info.uordblks, system_free);
+}
+
 FLASHMEM void print_ram_usage() {
     const auto info1 { ram1_usage() };
     const auto info2 { ram2_usage() };
+    const auto heap { heap_usage() };
 
-    EXC_PRINTF(PSTR("RAM1 size: %u KB, free RAM1: %u KB, data used: %u KB, bss used: %u KB, used heap: %u KB, system free: %u KB\r\n"),
-        (std::get<6>(info1) - std::get<5>(info1)) / 1'024UL, std::get<0>(info1) / 1'024UL, std::get<1>(info1) / 1'024UL, std::get<2>(info1) / 1'024UL,
-        std::get<3>(info1) / 1'024UL, std::get<4>(info1) / 1'024UL);
+    EXC_PRINTF(PSTR("DTCM size: %u KB, free DTCM: %u KB, data: %u KB, bss: %u KB\r\n"), (std::get<4>(info1) - std::get<3>(info1)) / 1'024UL,
+        std::get<0>(info1) / 1'024UL, std::get<1>(info1) / 1'024UL, std::get<2>(info1) / 1'024UL);
     EXC_PRINTF(PSTR("RAM2 size: %u KB, free RAM2: %u KB, used RAM2: %u KB\r\n"), std::get<1>(info2) / 1'024UL, std::get<0>(info2) / 1'024UL,
         (std::get<1>(info2) - std::get<0>(info2)) / 1'024UL);
+    EXC_PRINTF(PSTR("Used heap: %u KB, system free: %u KB\r\n"), std::get<0>(heap) / 1'024UL, std::get<1>(heap) / 1'024UL);
     EXC_PRINTF(PSTR("\r\n"));
     EXC_FLUSH();
 }
@@ -355,34 +380,13 @@ void* _sbrk_r(struct _reent* p_reent, ptrdiff_t incr) {
     if (DEBUG) {
         EXC_PRINTF(PSTR("_sbrk_r(%d): "), incr);
         EXC_PRINTF(PSTR("current_heap_end=0x%x "), reinterpret_cast<uintptr_t>(_g_current_heap_end));
-#if configTEENSY_ENABLE_HEAP_IN_RAM1 != 1
-        EXC_PRINTF(PSTR("_heap_start=0x%x "), reinterpret_cast<uintptr_t>(&_heap_start));
-        EXC_PRINTF(PSTR("_heap_end=0x%x\r\n"), reinterpret_cast<uintptr_t>(&_heap_end));
-#else
-        EXC_PRINTF(PSTR("_ebss=0x%x "), reinterpret_cast<uintptr_t>(&_ebss));
-        EXC_PRINTF(PSTR("_estack=0x%x\r\n"), reinterpret_cast<uintptr_t>(&_estack));
-#endif // configTEENSY_ENABLE_HEAP_IN_RAM1 != 1
+        EXC_PRINTF(PSTR("_g_heap_start=0x%x "), reinterpret_cast<uintptr_t>(_g_heap_start));
+        EXC_PRINTF(PSTR("_g_heap_max=0x%x\r\n"), reinterpret_cast<uintptr_t>(_g_heap_max));
     }
 
-    const auto primask = __get_PRIMASK();
-    __disable_irq();
     void* previous_heap_end { _g_current_heap_end };
 
-#if configTEENSY_ENABLE_HEAP_IN_RAM1 != 1
-    // Teensy 4, heap in RAM2 - no need to check vs stack, as that's in RAM1
-    // (except that it's probably mostly inside the tasks' allocations)
-    void* new_heap_end = _g_current_heap_end + incr;
-    if ( (new_heap_end >= &_heap_end)
-      || (new_heap_end < previous_heap_end) // incr is huge - overflowed!
-        )
-#else
-    // Teensy 3, or Teensy 4 with "heap" in RAM1
-    if ((reinterpret_cast<uintptr_t>(_g_current_heap_end) + incr >= reinterpret_cast<uintptr_t>(&_estack) - 8'192U)
-        || (reinterpret_cast<uintptr_t>(_g_current_heap_end) + incr < reinterpret_cast<uintptr_t>(&_ebss)))
-#endif // configTEENSY_ENABLE_HEAP_IN_RAM1 != 1
-    {
-        __set_PRIMASK(primask);
-
+    if ((_g_current_heap_end + incr >= _g_heap_max) || (_g_current_heap_end + incr < _g_heap_start)) {
         EXC_PRINTF(PSTR("_sbrk_r(%d): no mem available.\r\n"), incr);
 
 #if configUSE_MALLOC_FAILED_HOOK == 1
@@ -396,7 +400,6 @@ void* _sbrk_r(struct _reent* p_reent, ptrdiff_t incr) {
     }
 
     _g_current_heap_end += incr;
-    __set_PRIMASK(primask);
 
     return previous_heap_end;
 }
