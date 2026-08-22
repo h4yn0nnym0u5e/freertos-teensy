@@ -1,6 +1,6 @@
 /*
  * This file is part of the FreeRTOS port to Teensy boards.
- * Copyright (c) 2020-2025 Timo Sandmann
+ * Copyright (c) 2020-2026 Timo Sandmann
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,6 +26,7 @@
 #define _DEFAULT_SOURCE
 #include <cstring>
 #include <unistd.h>
+#include <malloc.h>
 #include <errno.h>
 #include <sys/time.h>
 #include <unwind.h>
@@ -37,8 +38,12 @@
 #include "event_responder_support.h"
 
 
-#if !(defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41 || defined __MK64FX512__ || defined __MK66FX1M0__)
+#if !(defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41)
 #error "Unsupported board"
+#endif
+
+#if !defined(configTEENSY_HEAP_ALLOCATION)
+#error "configTEENSY_HEAP_ALLOCATION not defined"
 #endif
 
 static constexpr bool DEBUG { false };
@@ -48,14 +53,36 @@ using namespace arduino;
 extern "C" {
 asm(".global _printf_float"); /**< printf supporting floating point values */
 
-extern unsigned long _heap_end;
 extern unsigned long _estack;
 extern unsigned long _ebss;
+extern unsigned long _heap_start;
+extern unsigned long _heap_end;
 
 extern volatile uint32_t systick_millis_count;
 extern volatile uint32_t systick_cycle_count;
 extern uint32_t set_arm_clock(uint32_t frequency);
-uint8_t* _g_current_heap_end { reinterpret_cast<uint8_t*>(&_ebss) + 32 };
+
+__attribute__((weak)) uint8_t* _g_heap_start {
+#if configTEENSY_HEAP_ALLOCATION == 1
+    /* heap placed in DTCM (after bss and before end of main stack) */
+    reinterpret_cast<uint8_t*>(&_ebss) + 32
+#elif configTEENSY_HEAP_ALLOCATION == 2
+    /* heap placed in RAM (after bss.dma and before exidx) */
+    reinterpret_cast<uint8_t*>(&_heap_start)
+#else
+#error "Unsupported configTEENSY_HEAP_ALLOCATION value"
+#endif // configTEENSY_HEAP_ALLOCATION
+};
+
+__attribute__((weak)) uint8_t* _g_heap_max {
+#if configTEENSY_HEAP_ALLOCATION == 1
+    reinterpret_cast<uint8_t*>(&_estack) - freertos::MAIN_STACK_SIZE
+#elif configTEENSY_HEAP_ALLOCATION == 2
+    reinterpret_cast<uint8_t*>(&_heap_end)
+#endif // configTEENSY_HEAP_ALLOCATION
+};
+
+uint8_t* _g_current_heap_end { _g_heap_start };
 
 
 FLASHMEM __attribute__((weak)) uint8_t get_debug_led_pin() {
@@ -212,9 +239,7 @@ FLASHMEM _Unwind_Reason_Code trace_fcn(_Unwind_Context* ctx, void* depth) {
  */
 FLASHMEM void assert_blink(const char* file, int line, const char* func, const char* expr) {
     portDISABLE_INTERRUPTS();
-#if defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41
     NVIC_SET_PRIORITY(IRQ_USB1, (configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY - 1) << (8 - configPRIO_BITS));
-#endif // ARDUINO_TEENSY40 || ARDUINO_TEENSY41
 
     EXC_PRINTF(PSTR("\r\nASSERT in [%s:%u]\t"), file, line);
     EXC_PRINTF(PSTR("%s(): "), func);
@@ -256,15 +281,23 @@ FLASHMEM void error_blink(const uint8_t n) {
     }
 }
 
+FLASHMEM std::tuple<size_t, size_t> heap_usage() {
+    const size_t system_free { static_cast<size_t>(_g_heap_max - _g_current_heap_end) };
+    const auto info { ::mallinfo() };
+
+    return std::make_tuple(info.uordblks, system_free);
+}
+
 FLASHMEM void print_ram_usage() {
     const auto info1 { ram1_usage() };
     const auto info2 { ram2_usage() };
+    const auto heap { heap_usage() };
 
-    EXC_PRINTF(PSTR("RAM1 size: %u KB, free RAM1: %u KB, data used: %u KB, bss used: %u KB, used heap: %u KB, system free: %u KB\r\n"),
-        (std::get<6>(info1) - std::get<5>(info1)) / 1'024UL, std::get<0>(info1) / 1'024UL, std::get<1>(info1) / 1'024UL, std::get<2>(info1) / 1'024UL,
-        std::get<3>(info1) / 1'024UL, std::get<4>(info1) / 1'024UL);
+    EXC_PRINTF(PSTR("DTCM size: %u KB, free DTCM: %u KB, data: %u KB, bss: %u KB\r\n"), (std::get<4>(info1) - std::get<3>(info1)) / 1'024UL,
+        std::get<0>(info1) / 1'024UL, std::get<1>(info1) / 1'024UL, std::get<2>(info1) / 1'024UL);
     EXC_PRINTF(PSTR("RAM2 size: %u KB, free RAM2: %u KB, used RAM2: %u KB\r\n"), std::get<1>(info2) / 1'024UL, std::get<0>(info2) / 1'024UL,
         (std::get<1>(info2) - std::get<0>(info2)) / 1'024UL);
+    EXC_PRINTF(PSTR("Used heap: %u KB, system free: %u KB\r\n"), std::get<0>(heap) / 1'024UL, std::get<1>(heap) / 1'024UL);
     EXC_PRINTF(PSTR("\r\n"));
     EXC_FLUSH();
 }
@@ -295,25 +328,9 @@ void event_responder_set_pend_sv() {
     }
 }
 
-FLASHMEM void yield() {
-    if (::xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED && freertos::g_yield_task) {
-        if (::xPortIsInsideInterrupt() == pdTRUE) {
-            BaseType_t higher_woken { pdFALSE };
-            ::xTaskNotifyFromISR(freertos::g_yield_task, 0, eNoAction, &higher_woken);
-            portYIELD_FROM_ISR(higher_woken);
-            portDATA_SYNC_BARRIER(); // mitigate arm errata #838869
-        } else {
-            ::xTaskNotify(freertos::g_yield_task, 0, eNoAction);
-            ::vTaskDelay(1);
-        }
-    } else {
-        freertos::yield();
-    }
-}
-
 #if configUSE_IDLE_HOOK == 1
-void vApplicationIdleHook() {}
-#endif // configUSE_IDLE_HOOK
+__attribute__((weak)) void vApplicationIdleHook() {}
+#endif // configUSE_IDLE_HOOK == 1
 
 #if configCHECK_FOR_STACK_OVERFLOW > 0
 FLASHMEM void vApplicationStackOverflowHook(TaskHandle_t, char* task_name) {
@@ -347,15 +364,15 @@ FLASHMEM void vApplicationGetTimerTaskMemory(StaticTask_t** ppxTimerTaskTCBBuffe
     *ppxTimerTaskStackBuffer = uxTimerTaskStack;
     *pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
 }
-#endif // configUSE_TIMERS
-#endif // configSUPPORT_STATIC_ALLOCATION
+#endif // configUSE_TIMERS == 1
+#endif // configSUPPORT_STATIC_ALLOCATION == 1
 
 #if defined PLATFORMIO || TEENSYDUINO >= 158
 #if configUSE_MALLOC_FAILED_HOOK == 1
 FLASHMEM void vApplicationMallocFailedHook() {
     freertos::error_blink(2);
 }
-#endif // configUSE_MALLOC_FAILED_HOOK
+#endif // configUSE_MALLOC_FAILED_HOOK == 1
 
 void* _sbrk_r(struct _reent* p_reent, ptrdiff_t incr) {
     static_assert(portSTACK_GROWTH == -1, "Stack growth down assumed");
@@ -363,18 +380,13 @@ void* _sbrk_r(struct _reent* p_reent, ptrdiff_t incr) {
     if (DEBUG) {
         EXC_PRINTF(PSTR("_sbrk_r(%d): "), incr);
         EXC_PRINTF(PSTR("current_heap_end=0x%x "), reinterpret_cast<uintptr_t>(_g_current_heap_end));
-        EXC_PRINTF(PSTR("_ebss=0x%x "), reinterpret_cast<uintptr_t>(&_ebss));
-        EXC_PRINTF(PSTR("_estack=0x%x\r\n"), reinterpret_cast<uintptr_t>(&_estack));
+        EXC_PRINTF(PSTR("_g_heap_start=0x%x "), reinterpret_cast<uintptr_t>(_g_heap_start));
+        EXC_PRINTF(PSTR("_g_heap_max=0x%x\r\n"), reinterpret_cast<uintptr_t>(_g_heap_max));
     }
 
-    const auto primask = __get_PRIMASK();
-    __disable_irq();
     void* previous_heap_end { _g_current_heap_end };
 
-    if ((reinterpret_cast<uintptr_t>(_g_current_heap_end) + incr >= reinterpret_cast<uintptr_t>(&_estack) - 8'192U)
-        || (reinterpret_cast<uintptr_t>(_g_current_heap_end) + incr < reinterpret_cast<uintptr_t>(&_ebss))) {
-        __set_PRIMASK(primask);
-
+    if ((_g_current_heap_end + incr >= _g_heap_max) || (_g_current_heap_end + incr < _g_heap_start)) {
         EXC_PRINTF(PSTR("_sbrk_r(%d): no mem available.\r\n"), incr);
 
 #if configUSE_MALLOC_FAILED_HOOK == 1
@@ -388,7 +400,6 @@ void* _sbrk_r(struct _reent* p_reent, ptrdiff_t incr) {
     }
 
     _g_current_heap_end += incr;
-    __set_PRIMASK(primask);
 
     return previous_heap_end;
 }
@@ -415,7 +426,7 @@ FLASHMEM int _gettimeofday(timeval* tv, void*) {
 uint64_t freertos_get_us() {
     return freertos::get_us();
 }
-#endif // configGENERATE_RUN_TIME_STATS
+#endif // configGENERATE_RUN_TIME_STATS == 1
 
 void startup_late_hook() __attribute__((noinline, section(".flashmem")));
 void startup_late_hook() {

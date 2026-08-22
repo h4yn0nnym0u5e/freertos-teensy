@@ -313,6 +313,16 @@ extern "C" {
  * catch pointer corruptions. Defaults to 0 if left undefined. */
 #define configENABLE_HEAP_PROTECTOR                  0
 
+/* Set configTEENSY_HEAP_ALLOCATION to 
+ * 1 to put the heap in DTCM (after bss and before end of main stack), 
+ * 2 to put the heap in RAM (after bss.dma and before exidx). */
+#define configTEENSY_HEAP_ALLOCATION                 1
+
+/* Main stack depth in bytes. */
+#ifndef configMAIN_STACK_DEPTH
+#define configMAIN_STACK_DEPTH                      ( 4096U )
+#endif
+
 /******************************************************************************/
 /* Interrupt nesting behaviour configuration. *********************************/
 /******************************************************************************/
@@ -365,6 +375,13 @@ PRIORITY THAN THIS! (higher priorities are lower numeric values. */
 #define configUSE_TICK_HOOK                   1
 #define configUSE_MALLOC_FAILED_HOOK          1
 #define configUSE_DAEMON_TASK_STARTUP_HOOK    0
+
+/* Set to 1 to override the implementation of yield() and setup_yield() */
+#define configUSE_CUSTOM_YIELD_HANDLER        0
+/* Frequency for yield() calls from yield task in ticks */
+#define configYIELD_TASK_FREQUENCY_TICKS      (pdMS_TO_TICKS(10))
+/* Size of stack for yield task in words */
+#define configYIELD_TASK_STACK_SIZE           ( 1536U / 4U ) 
 
 /* Set configUSE_SB_COMPLETED_CALLBACK to 1 to have send and receive completed
  * callbacks for each instance of a stream buffer or message buffer. When the
@@ -462,14 +479,9 @@ void assert_blink(const char*, int, const char*, const char*) __attribute__((nor
 }
 #define ASSERT_LOG(_msg) assert_blink("", __LINE__, __PRETTY_FUNCTION__, #_msg);
 #else
-#if defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41
-#define PROGMEM_FREERTOS __attribute__((section(".progmem")))
-#else
-#define PROGMEM_FREERTOS
-#endif
 #define ASSERT_LOG(_msg)                                                            \
     {                                                                               \
-        static const char _file_[] PROGMEM_FREERTOS = __FILE__;                     \
+        static const char _file_[] __attribute__((section(".progmem"))) = __FILE__; \
         assert_blink((const char*) _file_, __LINE__, __PRETTY_FUNCTION__, #_msg);   \
     }
 #endif // __cplusplus

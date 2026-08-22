@@ -1,6 +1,6 @@
 /*
  * This file is part of the FreeRTOS port to Teensy boards.
- * Copyright (c) 2020-2025 Timo Sandmann
+ * Copyright (c) 2020-2026 Timo Sandmann
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -79,7 +79,10 @@ void mcu_shutdown() __attribute__((noreturn, used));
 } // extern C
 
 namespace freertos {
+static constexpr uint32_t MAIN_STACK_SIZE { configMAIN_STACK_DEPTH }; // main stack reserved size in bytes
+
 void yield();
+void default_yield();
 
 /**
  * @brief Delay between led error flashes
@@ -95,10 +98,16 @@ void delay_ms(const uint32_t ms);
 void error_blink(const uint8_t n) __attribute__((noreturn));
 
 /**
- * @brief Get amount of used and free RAM1
- * @return Tuple of: free RAM in byte, used data in byte, used bss in byte, used heap in byte, system free in byte, size of itcm in byte, ram size in byte
+ * @brief Get current size of heap and system memory usage
+ * @return Tuple of: used heap in byte, system free in byte
  */
-std::tuple<size_t, size_t, size_t, size_t, size_t, size_t, size_t> ram1_usage();
+std::tuple<size_t, size_t> heap_usage();
+
+/**
+ * @brief Get amount of used and free RAM1
+ * @return Tuple of: free RAM in byte, used data in byte, used bss in byte, size of itcm in byte, ram size in byte
+ */
+std::tuple<size_t, size_t, size_t, size_t, size_t> ram1_usage();
 
 /**
  * @brief Get amount of used and free RAM2
