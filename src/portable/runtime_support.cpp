@@ -37,8 +37,6 @@
 
 #if defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41
 #include "imxrt.h"
-#elif defined __MK64FX512__ || defined __MK66FX1M0__
-#include "kinetis.h"
 #else
 #error "Unsupported board"
 #endif
@@ -143,11 +141,7 @@ FLASHMEM void freertos_lock_init() {
     SCB_SHPR3 = 255UL << 16UL;
 
     /* temporarily increase USB IRQ priority */
-#if defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41
     NVIC_SET_PRIORITY(IRQ_USB1, 0);
-#elif defined __MK64FX512__ || defined __MK66FX1M0__
-    NVIC_SET_PRIORITY(IRQ_USBOTG, 0);
-#endif
 
     portDATA_SYNC_BARRIER();
     portINSTR_SYNC_BARRIER();
