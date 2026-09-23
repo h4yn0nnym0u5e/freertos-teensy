@@ -17,23 +17,13 @@
  */
 
 /**
- * @file    event_responder_support.h
- * @brief   FreeRTOS support implementations for Teensy EventResponder
+ * @file    freertos_config_override.h
+ * @brief   FreeRTOS configuration overrides for Teensy boards
  * @author  Timo Sandmann
- * @date    20.05.2020
+ * @date    20.12.2025
  */
 
 #pragma once
 
-#include <cstdint>
-
-
-typedef struct tskTaskControlBlock* TaskHandle_t;
-
-namespace freertos {
-static constexpr uint16_t EVENT_TASK_STACK_SIZE { 256 };
-
-extern TaskHandle_t g_event_responder_task;
-
-void setup_event_responder();
-} // namespace freertos
+#undef configUSE_CUSTOM_YIELD_HANDLER
+#define configUSE_CUSTOM_YIELD_HANDLER 1

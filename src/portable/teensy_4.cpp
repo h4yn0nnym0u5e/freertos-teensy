@@ -1,6 +1,6 @@
 /*
  * This file is part of the FreeRTOS port to Teensy boards.
- * Copyright (c) 2020-2025 Timo Sandmann
+ * Copyright (c) 2020-2026 Timo Sandmann
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -25,8 +25,9 @@
 
 #if defined ARDUINO_TEENSY40 || defined ARDUINO_TEENSY41
 #include <cstring>
-#include <malloc.h>
 #include <tuple>
+#include <atomic>
+#include <malloc.h>
 #include <unwind.h>
 
 #include "teensy.h"
@@ -62,6 +63,8 @@ extern unsigned long _extram_start;
 extern unsigned long _extram_end;
 #endif // ARDUINO_TEENSY41
 extern unsigned long _itcm_block_count;
+extern uint8_t* _g_heap_start;
+extern uint8_t* _g_heap_max;
 extern uint8_t* _g_current_heap_end;
 
 extern volatile uint32_t systick_millis_count;
@@ -73,92 +76,33 @@ extern uint8_t external_psram_size;
 void __NVIC_SetPriorityGrouping(uint32_t PriorityGroup);
 } // extern C
 
-
-#ifdef USB_TRIPLE_SERIAL
-extern uint8_t yield_active_check_flags;
-extern const uint8_t _serialEventUSB2_default;
-extern const uint8_t _serialEventUSB1_default;
-#elif defined(USB_DUAL_SERIAL)
-extern uint8_t yield_active_check_flags;
-extern const uint8_t _serialEventUSB1_default;
-#else
-extern uint8_t yield_active_check_flags;
+#ifndef configUSE_CUSTOM_YIELD_HANDLER
+#define configUSE_CUSTOM_YIELD_HANDLER 0
 #endif
 
-#if TEENSYDUINO <= 158
-extern const uint8_t _serialEvent_default;
-#endif
+#if configUSE_CUSTOM_YIELD_HANDLER == 0
+void yield() {
+    freertos::default_yield();
+}
+#endif // configUSE_CUSTOM_YIELD_HANDLER == 0
+
+extern uint8_t yield_active_check_flags;
 
 namespace freertos {
-#if TEENSYDUINO <= 158
+TaskHandle_t g_yield_task {};
 
-FLASHMEM void yield() {
-    static uint8_t running = 0;
-    if (!yield_active_check_flags) {
-        // nothing to do
-        return;
-    }
-    if (running) {
-        return;
-    }
-    running = 1;
+void default_yield() {
+    static std::atomic<bool> running {};
 
-    // USB Serial - Add hack to minimize impact...
-    if (yield_active_check_flags & YIELD_CHECK_USB_SERIAL) {
-        if (Serial.available()) {
-            serialEvent();
-        }
-        if (_serialEvent_default) {
-            yield_active_check_flags &= ~YIELD_CHECK_USB_SERIAL;
-        }
-    }
-
-#if defined(USB_DUAL_SERIAL) || defined(USB_TRIPLE_SERIAL)
-    if (yield_active_check_flags & YIELD_CHECK_USB_SERIALUSB1) {
-        if (SerialUSB1.available()) {
-            serialEventUSB1();
-        }
-        if (_serialEventUSB1_default) {
-            yield_active_check_flags &= ~YIELD_CHECK_USB_SERIALUSB1;
-        }
-    }
-#endif // USB_DUAL_SERIAL || USB_TRIPLE_SERIAL
-#ifdef USB_TRIPLE_SERIAL
-    if (yield_active_check_flags & YIELD_CHECK_USB_SERIALUSB2) {
-        if (SerialUSB2.available()) {
-            serialEventUSB2();
-        }
-        if (_serialEventUSB2_default) {
-            yield_active_check_flags &= ~YIELD_CHECK_USB_SERIALUSB2;
-        }
-    }
-#endif // USB_TRIPLE_SERIAL
-
-#if !defined DISABLE_ARDUINO_HWSERIAL
-    // Current workaround until integrate with EventResponder.
-    if (yield_active_check_flags & YIELD_CHECK_HARDWARE_SERIAL) {
-        HardwareSerial::processSerialEventsList();
-    }
-#endif // !DISABLE_ARDUINO_HWSERIAL
-
-    running = 0;
-    if (yield_active_check_flags & YIELD_CHECK_EVENT_RESPONDER) {
-        EventResponder::runFromYield();
-    }
-}
-#else // TEENSYDUINO > 158
-FLASHMEM void yield() {
-    static uint8_t running = 0;
-
-    const uint8_t check_flags = yield_active_check_flags;
+    const auto check_flags { yield_active_check_flags };
     if (!check_flags) {
         return; // nothing to do
     }
 
-    if (running) {
+    bool expected {};
+    if (!running.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
         return;
     }
-    running = 1;
 
     // USB Serial - Add hack to minimize impact...
     if (check_flags & YIELD_CHECK_USB_SERIAL) {
@@ -173,28 +117,43 @@ FLASHMEM void yield() {
             serialEventUSB1();
         }
     }
-#endif // USB_DUAL_SERIAL || USB_TRIPLE_SERIAL
+#endif
 #ifdef USB_TRIPLE_SERIAL
     if (check_flags & YIELD_CHECK_USB_SERIALUSB2) {
         if (SerialUSB2.available()) {
             serialEventUSB2();
         }
     }
-#endif // USB_TRIPLE_SERIAL
+#endif
 
-#if !defined DISABLE_ARDUINO_HWSERIAL
+#ifndef DISABLE_ARDUINO_HWSERIAL
     // Current workaround until integrate with EventResponder.
     if (check_flags & YIELD_CHECK_HARDWARE_SERIAL) {
         HardwareSerialIMXRT::processSerialEventsList();
     }
 #endif // !DISABLE_ARDUINO_HWSERIAL
 
-    running = 0;
     if (check_flags & YIELD_CHECK_EVENT_RESPONDER) {
         EventResponder::runFromYield();
     }
+
+    running.store(false, std::memory_order_relaxed);
 }
-#endif // TEENSYDUINO
+
+FLASHMEM __attribute__((weak)) void setup_yield() {
+#if configUSE_CUSTOM_YIELD_HANDLER == 0
+    ::xTaskCreate(
+        [](void*) {
+            TickType_t last_yield_time { ::xTaskGetTickCount() };
+
+            while (true) {
+                ::xTaskDelayUntil(&last_yield_time, configYIELD_TASK_FREQUENCY_TICKS);
+                ::yield();
+            }
+        },
+        PSTR("YIELD"), configYIELD_TASK_STACK_SIZE, nullptr, 0, &g_yield_task);
+#endif // configUSE_CUSTOM_YIELD_HANDLER == 0
+}
 
 FLASHMEM void delay_ms(const uint32_t ms) {
     const uint32_t cycles_ms { static_cast<uint32_t>((1ULL << 32) * 1'000'000ULL / 2'000ULL / static_cast<uint64_t>(scale_cpu_cycles_to_microseconds)) };
@@ -212,23 +171,37 @@ FLASHMEM void delay_ms(const uint32_t ms) {
     portINSTR_SYNC_BARRIER();
 }
 
-FLASHMEM std::tuple<size_t, size_t, size_t, size_t, size_t, size_t, size_t> ram1_usage() {
+FLASHMEM std::tuple<size_t, size_t, size_t, size_t, size_t> ram1_usage() {
     const size_t blk_cnt { reinterpret_cast<uintptr_t>(&_itcm_block_count) };
     const size_t ram_size { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_estack) - reinterpret_cast<uint8_t*>(0x20'000'000)) + blk_cnt * 32'768U };
     const size_t bss { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_ebss) - reinterpret_cast<uint8_t*>(&_sbss)) };
     const size_t data { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_edata) - reinterpret_cast<uint8_t*>(&_sdata)) };
-    const size_t system_free { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_estack) - _g_current_heap_end) - 8'192U };
-    const auto info { mallinfo() };
-    const std::tuple<size_t, size_t, size_t, size_t, size_t, size_t, size_t> ret { system_free + info.fordblks, data, bss, info.uordblks, system_free,
-        blk_cnt * 32'768U, ram_size };
+    size_t dtcm_free;
+    if (_g_heap_start >= reinterpret_cast<uint8_t*>(&_heap_start) && _g_heap_start <= reinterpret_cast<uint8_t*>(_heap_end)) {
+        /* Heap in RAM, get free space from linker allocation */
+        dtcm_free = static_cast<size_t>(reinterpret_cast<uint8_t*>(&_estack) - reinterpret_cast<uint8_t*>(&_ebss)) - freertos::MAIN_STACK_SIZE;
+    } else {
+        /* Heap in DTCM, calculate free space based on program break and mallinfo */
+        const auto info { ::mallinfo() };
+        dtcm_free = static_cast<size_t>(_g_heap_max - _g_current_heap_end) + info.fordblks;
+    }
+    const std::tuple<size_t, size_t, size_t, size_t, size_t> ret { dtcm_free, data, bss, blk_cnt * 32'768U, ram_size };
     return ret;
 }
 
 FLASHMEM std::tuple<size_t, size_t> ram2_usage() {
     const size_t ram_size { static_cast<size_t>(reinterpret_cast<uint8_t*>(0x20'280'000) - reinterpret_cast<uint8_t*>(0x20'200'000)) };
-    const size_t free { static_cast<size_t>(reinterpret_cast<uint8_t*>(&_heap_end) - reinterpret_cast<uint8_t*>(&_heap_start)) };
+    size_t ram_free;
+    if (_g_heap_start >= reinterpret_cast<uint8_t*>(&_heap_start) && _g_heap_start <= reinterpret_cast<uint8_t*>(_heap_end)) {
+        /* Heap in RAM, calculate free space based on program break and mallinfo */
+        const auto info { ::mallinfo() };
+        ram_free = static_cast<size_t>(_g_heap_max - _g_current_heap_end) + info.fordblks;
+    } else {
+        /* Heap in DTCM, get free space from linker allocation */
+        ram_free = static_cast<size_t>(reinterpret_cast<uint8_t*>(&_heap_end) - reinterpret_cast<uint8_t*>(&_heap_start));
+    }
 
-    const std::tuple<size_t, size_t> ret { free, ram_size };
+    const std::tuple<size_t, size_t> ret { ram_free, ram_size };
     return ret;
 }
 
@@ -306,7 +279,7 @@ void unused_isr_freertos() {
 extern uint32_t ulTimerCountsForOneTick;
 extern uint32_t xMaximumPossibleSuppressedTicks;
 extern uint32_t ulStoppedTimerCompensation;
-#endif /* configUSE_TICKLESS_IDLE */
+#endif // configUSE_TICKLESS_IDLE == 1
 
 void vPortSetupTimerInterrupt() {
     if (DEBUG) {
@@ -360,11 +333,12 @@ void vPortSetupTimerInterrupt() {
         xMaximumPossibleSuppressedTicks = 0xffffffUL / ulTimerCountsForOneTick;
         ulStoppedTimerCompensation = 94UL / (configCPU_CLOCK_HZ / configSYSTICK_CLOCK_HZ);
     }
-#endif // configUSE_TICKLESS_IDLE
+#endif // configUSE_TICKLESS_IDLE == 1
 
     freertos::clock::sync_rtc();
 
     freertos::setup_event_responder();
+    freertos::setup_yield();
 
     if (DEBUG) {
         EXC_PRINTF_EARLY(PSTR("SCB_SHPR3=0x%x\r\n"), SCB_SHPR3);
@@ -385,7 +359,7 @@ void vApplicationTickHook() {
         n = 0;
     }
 }
-#else
+#else // configUSE_TICK_HOOK == 0
 #error "configUSE_TICK_HOOK == 0 isn't supported!"
 #endif // configUSE_TICK_HOOK
 

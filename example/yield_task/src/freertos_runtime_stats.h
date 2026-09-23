@@ -17,23 +17,31 @@
  */
 
 /**
- * @file    event_responder_support.h
- * @brief   FreeRTOS support implementations for Teensy EventResponder
+ * @file    freertos_runtime_stats.h
+ * @brief   Generate and print runtime stats on FreeRTOS
  * @author  Timo Sandmann
- * @date    20.05.2020
+ * @date    30.07.2022
  */
+
 
 #pragma once
 
+#include "arduino_freertos.h"
+
 #include <cstdint>
+#include <vector>
+#include <map>
 
 
-typedef struct tskTaskControlBlock* TaskHandle_t;
+class FreeRTOSRuntimeStats {
+    std::vector<TaskStatus_t> task_data_;
+    std::vector<std::pair<TaskHandle_t, float>> current_runtimes_;
+    std::map<TaskHandle_t, uint32_t> last_runtimes_;
+    uint32_t last_total_runtime_;
 
-namespace freertos {
-static constexpr uint16_t EVENT_TASK_STACK_SIZE { 256 };
+public:
+    FreeRTOSRuntimeStats();
 
-extern TaskHandle_t g_event_responder_task;
-
-void setup_event_responder();
-} // namespace freertos
+    bool generate();
+    bool print();
+};
