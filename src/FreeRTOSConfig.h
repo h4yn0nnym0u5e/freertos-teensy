@@ -316,7 +316,7 @@ extern "C" {
 /* Set configTEENSY_HEAP_ALLOCATION to 
  * 1 to put the heap in DTCM (after bss and before end of main stack), 
  * 2 to put the heap in RAM (after bss.dma and before exidx). */
-#define configTEENSY_HEAP_ALLOCATION                 1
+#define configTEENSY_HEAP_ALLOCATION                 2
 
 /* Main stack depth in bytes. */
 #ifndef configMAIN_STACK_DEPTH
